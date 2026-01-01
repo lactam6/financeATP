@@ -123,7 +123,19 @@ impl MintHandler {
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        // Update projections
+        // Check for idempotency early return (only 1 event ID returned for 2 operations means cached)
+        if event_ids.len() == 1 && idempotency_key.is_some() {
+            // This was an idempotent request - return cached result (skip projection update)
+            // Note: The original mint_id is not stored, so we generate a new one for the response
+            // In production, you'd want to store and retrieve the original response
+            return Ok(MintResult {
+                mint_id: event_ids[0], // Use the cached event ID as mint_id
+                recipient_user_id: command.recipient_user_id,
+                amount: amount.value(),
+            });
+        }
+
+        // Update projections (only for new requests)
         self.projection
             .apply_mint(
                 mint_id,

@@ -11,21 +11,8 @@ use sqlx::PgPool;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-pub mod aggregate;
-pub mod api;
-pub mod audit;
-mod config;
-mod db;
-pub mod domain;
-mod error;
-pub mod event_store;
-pub mod handlers;
-pub mod idempotency;
-pub mod jobs;
-pub mod projection;
-
-pub use config::Config;
-pub use error::{AppError, AppResult};
+use finance_atp::{api, Config, AppError, db};
+use finance_atp::jobs;
 
 /// Initialize tracing/logging
 fn init_tracing() {

@@ -28,7 +28,7 @@ use super::middleware::{AuthenticatedApiKey, RequestUser};
 // Request/Response types
 // =========================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CreateUserRequest {
     pub user_id: Uuid,
     pub username: String,
@@ -67,7 +67,7 @@ pub struct UpdateUserRequest {
     pub email: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TransferRequest {
     pub from_user_id: Uuid,
     pub to_user_id: Uuid,
@@ -96,7 +96,7 @@ pub struct TransferDetailResponse {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct MintRequest {
     pub recipient_user_id: Uuid,
     pub amount: String,
