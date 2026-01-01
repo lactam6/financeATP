@@ -1,0 +1,36 @@
+# Build artifacts
+/target
+
+# Environment variables (contains secrets like DATABASE_URL)
+.env
+
+# Temporary files
+cargo_warnings.txt
+*.log
+*.bak
+*.tmp
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Debug files
+*.pdb
+
+# Coverage reports
+*.gcov
+*.gcda
+*.gcno
+tarpaulin-report.html
+coverage/
+
+# Benchmark results
+criterion/
