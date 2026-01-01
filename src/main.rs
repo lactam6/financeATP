@@ -13,6 +13,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub mod aggregate;
 pub mod api;
+pub mod audit;
 mod config;
 mod db;
 pub mod domain;
@@ -20,6 +21,7 @@ mod error;
 pub mod event_store;
 pub mod handlers;
 pub mod idempotency;
+pub mod jobs;
 pub mod projection;
 
 pub use config::Config;
