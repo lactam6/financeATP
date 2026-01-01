@@ -7,6 +7,7 @@ mod commands;
 mod user_handler;
 mod transfer_handler;
 mod mint_handler;
+mod burn_handler;
 
 #[cfg(test)]
 mod tests;
@@ -15,3 +16,4 @@ pub use commands::*;
 pub use user_handler::CreateUserHandler;
 pub use transfer_handler::TransferHandler;
 pub use mint_handler::MintHandler;
+pub use burn_handler::{BurnHandler, BurnCommand, BurnResult};

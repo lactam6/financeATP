@@ -230,7 +230,9 @@ impl EventStore {
             }
             Some(_) => Ok(None), // Failed or pending, can retry
             None => {
-                // Register new idempotency key
+                // Register new idempotency key with hash of the key itself
+                // (Full request body hashing should be done at API layer)
+                let request_hash = format!("{:x}", md5::compute(key.as_bytes()));
                 sqlx::query(
                     r#"
                     INSERT INTO idempotency_keys (key, request_hash, processing_status, processing_started_at)
@@ -238,7 +240,7 @@ impl EventStore {
                     "#,
                 )
                 .bind(key)
-                .bind("") // TODO: Add request hash
+                .bind(&request_hash)
                 .execute(&mut **tx)
                 .await?;
                 Ok(None)

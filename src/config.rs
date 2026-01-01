@@ -21,6 +21,9 @@ pub struct Config {
     
     /// Environment (development, production)
     pub environment: String,
+    
+    /// Rate limit: requests per minute per API key
+    pub rate_limit_per_minute: i32,
 }
 
 impl Config {
@@ -43,12 +46,18 @@ impl Config {
 
         let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string());
 
+        let rate_limit_per_minute = env::var("RATE_LIMIT_PER_MINUTE")
+            .unwrap_or_else(|_| "100".to_string())
+            .parse()
+            .map_err(|_| ConfigError::InvalidValue("RATE_LIMIT_PER_MINUTE"))?;
+
         Ok(Self {
             database_url,
             database_max_connections,
             host,
             port,
             environment,
+            rate_limit_per_minute,
         })
     }
 

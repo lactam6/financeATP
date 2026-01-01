@@ -247,14 +247,51 @@ impl Aggregate for Account {
             }
             
             AccountEvent::MoneyCredited { amount, .. } => {
-                // Safe unwrap: Amount was validated when event was created
-                let amt = Amount::new(amount).expect("Invalid amount in event");
-                self.balance = self.balance.credit(&amt).expect("Balance overflow");
+                // Safely handle invalid amount in event
+                match Amount::new(amount) {
+                    Ok(amt) => {
+                        match self.balance.credit(&amt) {
+                            Ok(new_balance) => self.balance = new_balance,
+                            Err(e) => {
+                                tracing::error!(
+                                    "Balance overflow during credit replay for account {}: {}",
+                                    self.id, e
+                                );
+                                // Keep current balance to maintain consistency
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Invalid amount in MoneyCredited event for account {}: {}",
+                            self.id, e
+                        );
+                    }
+                }
             }
             
             AccountEvent::MoneyDebited { amount, .. } => {
-                let amt = Amount::new(amount).expect("Invalid amount in event");
-                self.balance = self.balance.debit(&amt).expect("Balance underflow");
+                // Safely handle invalid amount in event
+                match Amount::new(amount) {
+                    Ok(amt) => {
+                        match self.balance.debit(&amt) {
+                            Ok(new_balance) => self.balance = new_balance,
+                            Err(e) => {
+                                tracing::error!(
+                                    "Balance underflow during debit replay for account {}: {}",
+                                    self.id, e
+                                );
+                                // Keep current balance to maintain consistency
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Invalid amount in MoneyDebited event for account {}: {}",
+                            self.id, e
+                        );
+                    }
+                }
             }
             
             AccountEvent::AccountFrozen { .. } => {

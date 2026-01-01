@@ -39,6 +39,9 @@ impl CreateUserHandler {
         command: CreateUserCommand,
         context: &OperationContext,
     ) -> Result<CreateUserResult, AppError> {
+        // Start transaction for consistency
+        let mut tx = self.pool.begin().await?;
+
         // Check if user already exists
         let existing: Option<(Uuid,)> = sqlx::query_as(
             "SELECT id FROM users WHERE id = $1 OR username = $2 OR email = $3"
@@ -46,7 +49,7 @@ impl CreateUserHandler {
         .bind(command.user_id)
         .bind(&command.username)
         .bind(&command.email)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
 
         if existing.is_some() {
@@ -98,7 +101,7 @@ impl CreateUserHandler {
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        // Insert user record (for queries)
+        // Insert user record (for queries) - within transaction
         sqlx::query(
             r#"
             INSERT INTO users (id, username, email, display_name, created_at, updated_at)
@@ -109,10 +112,10 @@ impl CreateUserHandler {
         .bind(&command.username)
         .bind(&user.email())
         .bind(user.display_name())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
-        // Insert account record
+        // Insert account record - within transaction
         sqlx::query(
             r#"
             INSERT INTO accounts (id, user_id, account_type)
@@ -121,16 +124,26 @@ impl CreateUserHandler {
         )
         .bind(account_id)
         .bind(command.user_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
-        // Create balance projection
-        self.projection
-            .create_account_balance(account_id, event_ids[1])
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        // Create balance projection - within transaction
+        sqlx::query(
+            r#"
+            INSERT INTO account_balances (account_id, balance, last_event_id, last_event_version)
+            VALUES ($1, 0, $2, 1)
+            ON CONFLICT (account_id) DO NOTHING
+            "#,
+        )
+        .bind(account_id)
+        .bind(event_ids[1])
+        .execute(&mut *tx)
+        .await?;
 
-        // Save snapshots if needed
+        // Commit transaction
+        tx.commit().await?;
+
+        // Save snapshots if needed (outside transaction - non-critical)
         self.event_store
             .save_snapshot_if_needed(&user)
             .await

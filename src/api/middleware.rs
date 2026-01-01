@@ -183,8 +183,12 @@ pub async fn rate_limit_middleware(
         }
     };
 
-    // Check rate limit
-    let rate_limit = 100; // requests per minute
+    // Get rate limit from environment variable (with default of 100)
+    let rate_limit: i32 = std::env::var("RATE_LIMIT_PER_MINUTE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100);
+
     let allowed: bool = match sqlx::query_scalar(
         r#"SELECT check_and_increment_rate_limit($1, $2)"#,
     )

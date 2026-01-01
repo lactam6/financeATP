@@ -40,8 +40,11 @@ pub struct CreateUserRequest {
 #[derive(Debug, Serialize)]
 pub struct CreateUserResponse {
     pub user_id: Uuid,
-    pub account_id: Uuid,
     pub username: String,
+    pub email: String,
+    pub display_name: Option<String>,
+    pub balance: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,10 +79,11 @@ pub struct TransferRequest {
 #[derive(Debug, Serialize)]
 pub struct TransferResponse {
     pub transfer_id: Uuid,
+    pub status: String,
     pub from_user_id: Uuid,
     pub to_user_id: Uuid,
     pub amount: Decimal,
-    pub status: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize)]
@@ -102,8 +106,10 @@ pub struct MintRequest {
 #[derive(Debug, Serialize)]
 pub struct MintResponse {
     pub mint_id: Uuid,
-    pub recipient_user_id: Uuid,
+    pub status: String,
+    pub to_user_id: Uuid,
     pub amount: Decimal,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,8 +122,10 @@ pub struct BurnRequest {
 #[derive(Debug, Serialize)]
 pub struct BurnResponse {
     pub burn_id: Uuid,
+    pub status: String,
     pub from_user_id: Uuid,
     pub amount: Decimal,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -221,9 +229,11 @@ async fn create_user(
 ) -> Result<(StatusCode, Json<CreateUserResponse>), AppError> {
     let handler = CreateUserHandler::new(pool);
 
-    let command = CreateUserCommand::new(request.user_id, request.username, request.email);
-    let command = if let Some(display_name) = request.display_name {
-        command.with_display_name(display_name)
+    let email = request.email.clone();
+    let display_name = request.display_name.clone();
+    let command = CreateUserCommand::new(request.user_id, request.username, email.clone());
+    let command = if let Some(ref dn) = display_name {
+        command.with_display_name(dn.clone())
     } else {
         command
     };
@@ -234,8 +244,11 @@ async fn create_user(
         StatusCode::CREATED,
         Json(CreateUserResponse {
             user_id: result.user_id,
-            account_id: result.account_id,
             username: result.username,
+            email,
+            display_name,
+            balance: "0.00000000".to_string(),
+            created_at: chrono::Utc::now(),
         }),
     ))
 }
@@ -298,19 +311,51 @@ async fn update_user(
         return Err(AppError::Forbidden("Cannot modify system user".to_string()));
     }
 
-    // Build update query dynamically
-    if request.display_name.is_some() || request.email.is_some() {
-        let mut query = String::from("UPDATE users SET updated_at = NOW()");
-        
-        if let Some(ref display_name) = request.display_name {
-            query.push_str(&format!(", display_name = '{}'", display_name.replace('\'', "''")));
+    // FIXED: Use parameterized queries to prevent SQL injection
+    match (&request.display_name, &request.email) {
+        (Some(display_name), Some(email)) => {
+            sqlx::query(
+                r#"
+                UPDATE users 
+                SET display_name = $2, email = $3, updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(user_id)
+            .bind(display_name)
+            .bind(email)
+            .execute(&pool)
+            .await?;
         }
-        if let Some(ref email) = request.email {
-            query.push_str(&format!(", email = '{}'", email.replace('\'', "''")));
+        (Some(display_name), None) => {
+            sqlx::query(
+                r#"
+                UPDATE users 
+                SET display_name = $2, updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(user_id)
+            .bind(display_name)
+            .execute(&pool)
+            .await?;
         }
-        query.push_str(&format!(" WHERE id = '{}'", user_id));
-
-        sqlx::query(&query).execute(&pool).await?;
+        (None, Some(email)) => {
+            sqlx::query(
+                r#"
+                UPDATE users 
+                SET email = $2, updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(user_id)
+            .bind(email)
+            .execute(&pool)
+            .await?;
+        }
+        (None, None) => {
+            // No fields to update
+        }
     }
 
     // Return updated user
@@ -467,10 +512,11 @@ async fn transfer(
 
     Ok(Json(TransferResponse {
         transfer_id: result.transfer_id,
+        status: result.status,
         from_user_id: result.from_user_id,
         to_user_id: result.to_user_id,
         amount: result.amount,
-        status: result.status,
+        created_at: chrono::Utc::now(),
     }))
 }
 
@@ -557,8 +603,10 @@ async fn mint(
         StatusCode::CREATED,
         Json(MintResponse {
             mint_id: result.mint_id,
-            recipient_user_id: result.recipient_user_id,
+            status: "completed".to_string(),
+            to_user_id: result.recipient_user_id,
             amount: result.amount,
+            created_at: chrono::Utc::now(),
         }),
     ))
 }
@@ -570,8 +618,9 @@ async fn mint(
 /// Burn ATP (admin only) - removes ATP from circulation
 async fn burn(
     State(pool): State<PgPool>,
-    Extension(_context): Extension<OperationContext>,
+    Extension(context): Extension<OperationContext>,
     Extension(api_key): Extension<AuthenticatedApiKey>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<BurnRequest>,
 ) -> Result<(StatusCode, Json<BurnResponse>), AppError> {
     // Check admin permission
@@ -579,22 +628,29 @@ async fn burn(
         return Err(AppError::Forbidden("burn permission required".to_string()));
     }
 
-    // For now, burn is not fully implemented
-    // It would transfer from user to SYSTEM_BURN account
-    let burn_id = Uuid::new_v4();
-    let amount: Decimal = request
-        .amount
-        .parse()
-        .map_err(|_| AppError::InvalidRequest("Invalid amount".to_string()))?;
+    let idempotency_key = headers.get("Idempotency-Key");
+    let idem_key = idempotency_key
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| Uuid::parse_str(s).ok());
 
-    // TODO: Implement actual burn logic via TransferHandler to SYSTEM_BURN
+    let handler = crate::handlers::BurnHandler::new(pool);
+
+    let command = crate::handlers::BurnCommand::new(
+        request.from_user_id,
+        request.amount,
+        request.reason,
+    );
+
+    let result = handler.execute(command, idem_key, &context).await?;
 
     Ok((
         StatusCode::CREATED,
         Json(BurnResponse {
-            burn_id,
-            from_user_id: request.from_user_id,
-            amount,
+            burn_id: result.burn_id,
+            status: "completed".to_string(),
+            from_user_id: result.from_user_id,
+            amount: result.amount,
+            created_at: chrono::Utc::now(),
         }),
     ))
 }

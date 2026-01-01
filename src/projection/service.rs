@@ -139,7 +139,8 @@ impl ProjectionService {
         let journal_id = transfer_id; // Use transfer_id as journal_id for simplicity
         let amount_value = amount.value();
 
-        // Debit entry (money going TO recipient)
+        // Debit entry (money leaving from sender)
+        // In double-entry: Debit = source of funds being reduced
         sqlx::query(
             r#"
             INSERT INTO ledger_entries (journal_id, transfer_event_id, account_id, amount, entry_type)
@@ -148,12 +149,13 @@ impl ProjectionService {
         )
         .bind(journal_id)
         .bind(event_id)
-        .bind(to_account_id)
+        .bind(from_account_id)  // FIXED: debit goes to sender (money leaving)
         .bind(amount_value)
         .execute(&mut **tx)
         .await?;
 
-        // Credit entry (money going FROM sender)
+        // Credit entry (money entering to recipient)
+        // In double-entry: Credit = destination of funds being increased
         sqlx::query(
             r#"
             INSERT INTO ledger_entries (journal_id, transfer_event_id, account_id, amount, entry_type)
@@ -162,7 +164,7 @@ impl ProjectionService {
         )
         .bind(journal_id)
         .bind(event_id)
-        .bind(from_account_id)
+        .bind(to_account_id)  // FIXED: credit goes to recipient (money entering)
         .bind(amount_value)
         .execute(&mut **tx)
         .await?;
