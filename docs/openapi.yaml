@@ -1,0 +1,354 @@
+openapi: 3.0.3
+info:
+  title: financeATP API
+  description: |
+    ATP通貨管理バックエンドAPI。
+    イベントソーシングと複式簿記による堅牢な金融トランザクション処理を提供。
+    
+    **⚠️ 重要**: このAPIは内部サービス専用です。
+    認証済みのフロントエンド（Next.js等）経由でのみアクセスしてください。
+  version: 1.0.0
+  contact:
+    name: financeATP Team
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: ローカル開発環境
+  - url: https://api.example.com/api/v1
+    description: 本番環境
+
+security:
+  - APIKeyAuth: []
+
+tags:
+  - name: Users
+    description: ユーザー管理
+  - name: Transfers
+    description: 送金処理
+  - name: Admin
+    description: 管理者API（ATP発行・焼却）
+
+components:
+  securitySchemes:
+    APIKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: サービス間認証用APIキー
+
+  schemas:
+    # リクエスト
+    CreateUserRequest:
+      type: object
+      required: [user_id, username, email]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+          pattern: '^[a-zA-Z0-9_]+$'
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+          maxLength: 100
+
+    TransferRequest:
+      type: object
+      required: [from_user_id, to_user_id, amount]
+      properties:
+        from_user_id:
+          type: string
+          format: uuid
+        to_user_id:
+          type: string
+          format: uuid
+        amount:
+          type: string
+          description: 金額（8桁精度、例: "100.00000000"）
+        memo:
+          type: string
+          maxLength: 500
+
+    MintRequest:
+      type: object
+      required: [recipient_user_id, amount, reason]
+      properties:
+        recipient_user_id:
+          type: string
+          format: uuid
+        amount:
+          type: string
+        reason:
+          type: string
+
+    BurnRequest:
+      type: object
+      required: [from_user_id, amount, reason]
+      properties:
+        from_user_id:
+          type: string
+          format: uuid
+        amount:
+          type: string
+        reason:
+          type: string
+
+    # レスポンス
+    UserResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+        display_name:
+          type: string
+        balance:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    BalanceResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        balance:
+          type: string
+          description: 残高（8桁精度）
+
+    TransferResponse:
+      type: object
+      properties:
+        transfer_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [completed]
+        from_user_id:
+          type: string
+          format: uuid
+        to_user_id:
+          type: string
+          format: uuid
+        amount:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    MintResponse:
+      type: object
+      properties:
+        mint_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        to_user_id:
+          type: string
+          format: uuid
+        amount:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: 冪等性キー（重複処理防止）
+
+    RequestUserId:
+      name: X-Request-User-Id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: リクエスト元ユーザーID（フロントエンドが設定）
+
+paths:
+  /users:
+    post:
+      tags: [Users]
+      summary: ユーザー作成
+      description: 新規ユーザーとuser_wallet口座を作成
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: ユーザー作成成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: リクエスト不正
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 冪等性キー競合
+
+  /users/{user_id}:
+    get:
+      tags: [Users]
+      summary: ユーザー情報取得
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '404':
+          description: ユーザーが見つからない
+
+  /users/{user_id}/balance:
+    get:
+      tags: [Users]
+      summary: 残高取得
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceResponse'
+        '404':
+          description: ユーザーが見つからない
+
+  /transfers:
+    post:
+      tags: [Transfers]
+      summary: 送金実行
+      description: |
+        ユーザー間送金を実行。
+        X-Request-User-IdがFromUserIdと一致しない場合は403エラー。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RequestUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      responses:
+        '200':
+          description: 送金成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+        '400':
+          description: 残高不足 / リクエスト不正
+        '403':
+          description: 送金権限なし
+        '404':
+          description: ユーザーが見つからない
+
+  /admin/mint:
+    post:
+      tags: [Admin]
+      summary: ATP発行
+      description: SYSTEM_MINTから指定ユーザーへATPを発行
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MintRequest'
+      responses:
+        '201':
+          description: 発行成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MintResponse'
+        '403':
+          description: admin権限が必要
+
+  /admin/burn:
+    post:
+      tags: [Admin]
+      summary: ATP焼却
+      description: 指定ユーザーからATPを焼却
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BurnRequest'
+      responses:
+        '201':
+          description: 焼却成功
+        '400':
+          description: 残高不足
+        '403':
+          description: admin権限が必要
+
+  /health:
+    get:
+      summary: ヘルスチェック
+      security: []
+      responses:
+        '200':
+          description: 正常稼働中
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: OK
