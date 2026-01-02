@@ -11,6 +11,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -18,7 +19,7 @@ use crate::domain::OperationContext;
 use crate::error::AppError;
 use crate::handlers::{
     CreateUserCommand, CreateUserHandler, MintCommand, MintHandler, TransferCommand,
-    TransferHandler,
+    TransferHandler, UpdateUserCommand, UpdateUserHandler, DeactivateUserCommand, DeactivateUserHandler,
 };
 use crate::projection::ProjectionService;
 
@@ -187,6 +188,53 @@ pub struct EventsListResponse {
 }
 
 // =========================================================================
+// API Key Management Types
+// =========================================================================
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CreateApiKeyRequest {
+    pub name: String,
+    pub permissions: Vec<String>,
+    #[serde(default = "default_rate_limit")]
+    pub rate_limit_per_minute: i32,
+}
+
+fn default_rate_limit() -> i32 {
+    1000
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateApiKeyResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub api_key: String,  // Only returned on creation
+    pub key_prefix: String,
+    pub permissions: Vec<String>,
+    pub rate_limit_per_minute: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiKeyResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub key_prefix: String,
+    pub permissions: Vec<String>,
+    pub rate_limit_per_minute: i32,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateApiKeyRequest {
+    pub name: Option<String>,
+    pub permissions: Option<Vec<String>>,
+    pub rate_limit_per_minute: Option<i32>,
+    pub is_active: Option<bool>,
+}
+
+// =========================================================================
 // API Router
 // =========================================================================
 
@@ -210,6 +258,11 @@ pub fn create_router() -> Router<PgPool> {
         .route("/admin/mint", post(mint))
         .route("/admin/burn", post(burn))
         .route("/admin/events", get(get_events))
+        // API Key Management
+        .route("/admin/api-keys", post(create_api_key))
+        .route("/admin/api-keys", get(list_api_keys))
+        .route("/admin/api-keys/:key_id", patch(update_api_key))
+        .route("/admin/api-keys/:key_id", delete(delete_api_key))
         // Legacy endpoints for compatibility
         .route("/transfer", post(transfer))
         .route("/mint", post(mint))
@@ -296,67 +349,38 @@ async fn get_user(
 /// Update user
 async fn update_user(
     State(pool): State<PgPool>,
+    Extension(context): Extension<OperationContext>,
+    Extension(api_key): Extension<AuthenticatedApiKey>,
     Path(user_id): Path<Uuid>,
     Json(request): Json<UpdateUserRequest>,
 ) -> Result<Json<UserResponse>, AppError> {
-    // Check if user exists
-    let exists: Option<bool> = sqlx::query_scalar("SELECT is_system FROM users WHERE id = $1")
+    // Check permission
+    if !api_key.has_permission("write:users") {
+        return Err(AppError::Forbidden("write:users permission required".to_string()));
+    }
+
+    // Check if user is system user
+    let is_system: Option<bool> = sqlx::query_scalar("SELECT is_system FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_optional(&pool)
         .await?;
 
-    let is_system = exists.ok_or_else(|| AppError::UserNotFound(user_id.to_string()))?;
+    let is_system = is_system.ok_or_else(|| AppError::UserNotFound(user_id.to_string()))?;
 
     if is_system {
         return Err(AppError::Forbidden("Cannot modify system user".to_string()));
     }
 
-    // FIXED: Use parameterized queries to prevent SQL injection
-    match (&request.display_name, &request.email) {
-        (Some(display_name), Some(email)) => {
-            sqlx::query(
-                r#"
-                UPDATE users 
-                SET display_name = $2, email = $3, updated_at = NOW()
-                WHERE id = $1
-                "#,
-            )
-            .bind(user_id)
-            .bind(display_name)
-            .bind(email)
-            .execute(&pool)
-            .await?;
-        }
-        (Some(display_name), None) => {
-            sqlx::query(
-                r#"
-                UPDATE users 
-                SET display_name = $2, updated_at = NOW()
-                WHERE id = $1
-                "#,
-            )
-            .bind(user_id)
-            .bind(display_name)
-            .execute(&pool)
-            .await?;
-        }
-        (None, Some(email)) => {
-            sqlx::query(
-                r#"
-                UPDATE users 
-                SET email = $2, updated_at = NOW()
-                WHERE id = $1
-                "#,
-            )
-            .bind(user_id)
-            .bind(email)
-            .execute(&pool)
-            .await?;
-        }
-        (None, None) => {
-            // No fields to update
-        }
-    }
+    // Build changes
+    let changes = crate::domain::UserChanges {
+        display_name: request.display_name.clone(),
+        email: request.email.clone(),
+    };
+
+    // Execute via handler (event sourced)
+    let handler = UpdateUserHandler::new(pool.clone());
+    let command = UpdateUserCommand::new(user_id, changes);
+    handler.execute(command, &context).await?;
 
     // Return updated user
     get_user(State(pool), Path(user_id)).await
@@ -369,25 +393,19 @@ async fn update_user(
 /// Deactivate user (soft delete)
 async fn delete_user(
     State(pool): State<PgPool>,
+    Extension(context): Extension<OperationContext>,
+    Extension(api_key): Extension<AuthenticatedApiKey>,
     Path(user_id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    // Check if user exists and is not system
-    let is_system: Option<bool> = sqlx::query_scalar("SELECT is_system FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_optional(&pool)
-        .await?;
-
-    let is_system = is_system.ok_or_else(|| AppError::UserNotFound(user_id.to_string()))?;
-
-    if is_system {
-        return Err(AppError::Forbidden("Cannot delete system user".to_string()));
+    // Check permission
+    if !api_key.has_permission("write:users") {
+        return Err(AppError::Forbidden("write:users permission required".to_string()));
     }
 
-    // Soft delete by setting is_active = false
-    sqlx::query("UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1")
-        .bind(user_id)
-        .execute(&pool)
-        .await?;
+    // Execute via handler (event sourced)
+    let handler = DeactivateUserHandler::new(pool);
+    let command = DeactivateUserCommand::new(user_id);
+    handler.execute(command, &context).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -584,8 +602,8 @@ async fn mint(
     Json(request): Json<MintRequest>,
 ) -> Result<(StatusCode, Json<MintResponse>), AppError> {
     // Check admin permission
-    if !api_key.has_permission("mint") {
-        return Err(AppError::Forbidden("mint permission required".to_string()));
+    if !api_key.has_permission("admin:mint") {
+        return Err(AppError::Forbidden("admin:mint permission required".to_string()));
     }
 
     let idempotency_key = headers.get("Idempotency-Key");
@@ -624,8 +642,8 @@ async fn burn(
     Json(request): Json<BurnRequest>,
 ) -> Result<(StatusCode, Json<BurnResponse>), AppError> {
     // Check admin permission
-    if !api_key.has_permission("burn") {
-        return Err(AppError::Forbidden("burn permission required".to_string()));
+    if !api_key.has_permission("admin:burn") {
+        return Err(AppError::Forbidden("admin:burn permission required".to_string()));
     }
 
     let idempotency_key = headers.get("Idempotency-Key");
@@ -666,8 +684,8 @@ async fn get_events(
     Query(query): Query<EventsQuery>,
 ) -> Result<Json<EventsListResponse>, AppError> {
     // Check admin permission
-    if !api_key.has_permission("admin") {
-        return Err(AppError::Forbidden("admin permission required".to_string()));
+    if !api_key.has_permission("admin:events") {
+        return Err(AppError::Forbidden("admin:events permission required".to_string()));
     }
 
     let limit = query.limit.min(1000);
@@ -761,6 +779,212 @@ async fn get_balance_by_path(
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<BalanceResponse>, AppError> {
     get_user_balance(State(pool), Path(user_id)).await
+}
+
+// =========================================================================
+// API Key Management Handlers
+// =========================================================================
+
+/// Generate a random API key
+fn generate_api_key() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let random_bytes: [u8; 24] = rng.gen();
+    format!("sk_live_{}", hex::encode(random_bytes))
+}
+
+/// Create a new API key
+async fn create_api_key(
+    State(pool): State<PgPool>,
+    Extension(api_key): Extension<AuthenticatedApiKey>,
+    Json(request): Json<CreateApiKeyRequest>,
+) -> Result<(StatusCode, Json<CreateApiKeyResponse>), AppError> {
+    // Check for admin:api-keys permission
+    if !api_key.permissions.iter().any(|p| p == "admin:api-keys") {
+        return Err(AppError::Forbidden("admin:api-keys permission required".to_string()));
+    }
+
+    let id = Uuid::new_v4();
+    let raw_key = generate_api_key();
+    let key_prefix = raw_key[..8].to_string();
+    let key_hash = format!("{:x}", sha2::Sha256::digest(raw_key.as_bytes()));
+    let now = chrono::Utc::now();
+
+    sqlx::query(
+        r#"
+        INSERT INTO api_keys (id, name, key_prefix, key_hash, permissions, rate_limit_per_minute, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#
+    )
+    .bind(id)
+    .bind(&request.name)
+    .bind(&key_prefix)
+    .bind(&key_hash)
+    .bind(&request.permissions)
+    .bind(request.rate_limit_per_minute)
+    .bind(now)
+    .execute(&pool)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(CreateApiKeyResponse {
+        id,
+        name: request.name,
+        api_key: raw_key,
+        key_prefix,
+        permissions: request.permissions,
+        rate_limit_per_minute: request.rate_limit_per_minute,
+        created_at: now,
+    })))
+}
+
+/// List all API keys
+async fn list_api_keys(
+    State(pool): State<PgPool>,
+    Extension(api_key): Extension<AuthenticatedApiKey>,
+) -> Result<Json<Vec<ApiKeyResponse>>, AppError> {
+    // Check for admin:api-keys permission
+    if !api_key.permissions.iter().any(|p| p == "admin:api-keys") {
+        return Err(AppError::Forbidden("admin:api-keys permission required".to_string()));
+    }
+
+    let keys: Vec<ApiKeyResponse> = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, i32, bool, DateTime<Utc>, Option<DateTime<Utc>>)>(
+        r#"
+        SELECT id, name, key_prefix, permissions, rate_limit_per_minute, is_active, created_at, last_used_at
+        FROM api_keys
+        ORDER BY created_at DESC
+        "#
+    )
+    .fetch_all(&pool)
+    .await?
+    .into_iter()
+    .map(|(id, name, key_prefix, permissions, rate_limit_per_minute, is_active, created_at, last_used_at)| {
+        ApiKeyResponse {
+            id,
+            name,
+            key_prefix,
+            permissions,
+            rate_limit_per_minute,
+            is_active,
+            created_at,
+            last_used_at,
+        }
+    })
+    .collect();
+
+    Ok(Json(keys))
+}
+
+/// Update an API key
+async fn update_api_key(
+    State(pool): State<PgPool>,
+    Extension(api_key): Extension<AuthenticatedApiKey>,
+    Path(key_id): Path<Uuid>,
+    Json(request): Json<UpdateApiKeyRequest>,
+) -> Result<Json<ApiKeyResponse>, AppError> {
+    // Check for admin:api-keys permission
+    if !api_key.permissions.iter().any(|p| p == "admin:api-keys") {
+        return Err(AppError::Forbidden("admin:api-keys permission required".to_string()));
+    }
+
+    // Build dynamic update query
+    let mut updates = Vec::new();
+    let mut params: Vec<String> = Vec::new();
+    
+    if let Some(ref name) = request.name {
+        updates.push(format!("name = ${}", params.len() + 2));
+        params.push(name.clone());
+    }
+    if let Some(ref rate_limit) = request.rate_limit_per_minute {
+        updates.push(format!("rate_limit_per_minute = ${}", params.len() + 2));
+        params.push(rate_limit.to_string());
+    }
+    if let Some(ref is_active) = request.is_active {
+        updates.push(format!("is_active = ${}", params.len() + 2));
+        params.push(is_active.to_string());
+    }
+
+    if updates.is_empty() && request.permissions.is_none() {
+        return Err(AppError::InvalidRequest("No fields to update".to_string()));
+    }
+
+    // Handle permissions separately due to array type
+    if let Some(ref permissions) = request.permissions {
+        sqlx::query("UPDATE api_keys SET permissions = $2 WHERE id = $1")
+            .bind(key_id)
+            .bind(permissions)
+            .execute(&pool)
+            .await?;
+    }
+
+    // Handle other updates
+    if let Some(ref name) = request.name {
+        sqlx::query("UPDATE api_keys SET name = $2 WHERE id = $1")
+            .bind(key_id)
+            .bind(name)
+            .execute(&pool)
+            .await?;
+    }
+    if let Some(rate_limit) = request.rate_limit_per_minute {
+        sqlx::query("UPDATE api_keys SET rate_limit_per_minute = $2 WHERE id = $1")
+            .bind(key_id)
+            .bind(rate_limit)
+            .execute(&pool)
+            .await?;
+    }
+    if let Some(is_active) = request.is_active {
+        sqlx::query("UPDATE api_keys SET is_active = $2 WHERE id = $1")
+            .bind(key_id)
+            .bind(is_active)
+            .execute(&pool)
+            .await?;
+    }
+
+    // Fetch updated key
+    let row: Option<(Uuid, String, String, Vec<String>, i32, bool, DateTime<Utc>, Option<DateTime<Utc>>)> = 
+        sqlx::query_as(
+            "SELECT id, name, key_prefix, permissions, rate_limit_per_minute, is_active, created_at, last_used_at FROM api_keys WHERE id = $1"
+        )
+        .bind(key_id)
+        .fetch_optional(&pool)
+        .await?;
+
+    let (id, name, key_prefix, permissions, rate_limit_per_minute, is_active, created_at, last_used_at) = 
+        row.ok_or_else(|| AppError::InvalidRequest("API key not found".to_string()))?;
+
+    Ok(Json(ApiKeyResponse {
+        id,
+        name,
+        key_prefix,
+        permissions,
+        rate_limit_per_minute,
+        is_active,
+        created_at,
+        last_used_at,
+    }))
+}
+
+/// Delete (deactivate) an API key
+async fn delete_api_key(
+    State(pool): State<PgPool>,
+    Extension(api_key): Extension<AuthenticatedApiKey>,
+    Path(key_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    // Check for admin:api-keys permission
+    if !api_key.permissions.iter().any(|p| p == "admin:api-keys") {
+        return Err(AppError::Forbidden("admin:api-keys permission required".to_string()));
+    }
+
+    // Soft delete by setting is_active = false
+    let result = sqlx::query("UPDATE api_keys SET is_active = false WHERE id = $1")
+        .bind(key_id)
+        .execute(&pool)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::InvalidRequest("API key not found".to_string()));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

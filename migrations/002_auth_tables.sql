@@ -17,7 +17,7 @@
 CREATE TABLE api_keys (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(100) NOT NULL,
-    key_prefix VARCHAR(12) NOT NULL,
+    key_prefix VARCHAR(32) NOT NULL,
     key_hash VARCHAR(64) NOT NULL,
     permissions TEXT[] NOT NULL,
     allowed_ips INET[],
@@ -25,9 +25,7 @@ CREATE TABLE api_keys (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ,
-    last_used_at TIMESTAMPTZ,
-    
-    UNIQUE(key_prefix)
+    last_used_at TIMESTAMPTZ
 );
 
 COMMENT ON TABLE api_keys IS 'API keys for service-to-service authentication';
@@ -59,7 +57,7 @@ INSERT INTO api_keys (
     'Development API Key',
     'sk_dev_',
     encode(sha256('test1234567890abcdef'::bytea), 'hex'),
-    ARRAY['read:users', 'write:users', 'read:accounts', 'write:transfers', 'admin:mint'],
+    ARRAY['read:users', 'write:users', 'read:accounts', 'write:transfers', 'admin:mint', 'admin:burn', 'admin:events', 'admin:api-keys'],
     1000
 );
 

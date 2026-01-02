@@ -57,6 +57,15 @@ components:
           type: string
           maxLength: 100
 
+    UpdateUserRequest:
+      type: object
+      properties:
+        display_name:
+          type: string
+        email:
+          type: string
+          format: email
+
     TransferRequest:
       type: object
       required: [from_user_id, to_user_id, amount]
@@ -245,6 +254,47 @@ paths:
         '404':
           description: ユーザーが見つからない
 
+    patch:
+      tags: [Users]
+      summary: ユーザー更新
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '403':
+          description: システムユーザーは変更不可
+
+    delete:
+      tags: [Users]
+      summary: ユーザー無効化 (Soft Delete)
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: 無効化成功
+        '403':
+          description: システムユーザーは削除不可
+
   /users/{user_id}/balance:
     get:
       tags: [Users]
@@ -352,3 +402,155 @@ paths:
               schema:
                 type: string
                 example: OK
+
+  /admin/api-keys:
+    post:
+      tags: [Admin]
+      summary: APIキー新規発行
+      description: |
+        新しいAPIキーを発行（admin:api-keys権限が必要）。
+        
+        **利用可能な権限一覧:**
+        - `read:users`: ユーザー情報の読み取り
+        - `write:users`: ユーザーの作成・更新
+        - `read:accounts`: 口座情報の読み取り
+        - `write:transfers`: 送金の実行
+        - `admin:mint`: ATPの発行
+        - `admin:burn`: ATPの焼却
+        - `admin:events`: イベントログの参照
+        - `admin:api-keys`: APIキーの管理
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, permissions]
+              properties:
+                name:
+                  type: string
+                permissions:
+                  type: array
+                  items:
+                    type: string
+                rate_limit_per_minute:
+                  type: integer
+                  default: 1000
+      responses:
+        '201':
+          description: APIキー発行成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  name:
+                    type: string
+                  api_key:
+                    type: string
+                    description: 発行時のみ返却される平文キー
+                  key_prefix:
+                    type: string
+                  permissions:
+                    type: array
+                    items:
+                      type: string
+                  rate_limit_per_minute:
+                    type: integer
+                  created_at:
+                    type: string
+                    format: date-time
+        '403':
+          description: admin:api-keys権限が必要
+    get:
+      tags: [Admin]
+      summary: APIキー一覧取得
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                    name:
+                      type: string
+                    key_prefix:
+                      type: string
+                    permissions:
+                      type: array
+                      items:
+                        type: string
+                    rate_limit_per_minute:
+                      type: integer
+                    is_active:
+                      type: boolean
+                    created_at:
+                      type: string
+                      format: date-time
+                    last_used_at:
+                      type: string
+                      format: date-time
+        '403':
+          description: admin:api-keys権限が必要
+
+  /admin/api-keys/{key_id}:
+    patch:
+      tags: [Admin]
+      summary: APIキー更新
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                permissions:
+                  type: array
+                  items:
+                    type: string
+                rate_limit_per_minute:
+                  type: integer
+                is_active:
+                  type: boolean
+      responses:
+        '200':
+          description: 更新成功
+        '403':
+          description: admin:api-keys権限が必要
+        '404':
+          description: APIキーが見つからない
+    delete:
+      tags: [Admin]
+      summary: APIキー無効化
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: 無効化成功
+        '403':
+          description: admin:api-keys権限が必要
+        '404':
+          description: APIキーが見つからない

@@ -101,6 +101,7 @@ impl Amount {
 
     /// Return zero amount (for internal use)
     /// Note: This is a special case that bypasses validation
+    #[allow(dead_code)]
     pub(crate) fn zero() -> Decimal {
         Decimal::ZERO
     }
@@ -170,6 +171,12 @@ impl Balance {
     /// Create a zero balance
     pub fn zero() -> Self {
         Self(Decimal::ZERO)
+    }
+
+    /// Create a balance from a decimal value without validation
+    /// WARNING: Only use for system accounts that can have negative balances (e.g., SYSTEM_MINT)
+    pub fn from_decimal_unchecked(value: Decimal) -> Self {
+        Self(value)
     }
 
     /// Get the underlying value

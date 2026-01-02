@@ -124,8 +124,9 @@ CREATE INDEX idx_accounts_active ON accounts(user_id) WHERE is_active = TRUE;
 -- ============================================================================
 INSERT INTO accounts (user_id, account_type) VALUES
     ('00000000-0000-0000-0000-000000000001', 'mint_source'),
-    ('00000000-0000-0000-0000-000000000002', 'fee_income'),
-    ('00000000-0000-0000-0000-000000000003', 'system_reserve');
+    ('00000000-0000-0000-0000-000000000002', 'mint_source'),  -- SYSTEM_BURN uses mint_source for debiting
+    ('00000000-0000-0000-0000-000000000003', 'fee_income'),
+    ('00000000-0000-0000-0000-000000000004', 'system_reserve');
 
 -- ============================================================================
 -- M030: Create account_balances table
@@ -147,8 +148,14 @@ COMMENT ON COLUMN account_balances.last_event_version IS 'Version of the last pr
 -- ============================================================================
 -- M031: Create balance constraints (non-negative, max)
 -- ============================================================================
+-- Note: non_negative_balance constraint removed to allow system accounts (e.g. mint_source)
+-- to have negative balances (representing liabilities/issued currency).
+-- Application logic ensures user wallets don't go negative.
+
+/*
 ALTER TABLE account_balances ADD CONSTRAINT non_negative_balance 
     CHECK (balance >= 0);
+*/
 
 ALTER TABLE account_balances ADD CONSTRAINT max_balance 
     CHECK (balance <= 1000000000000.00000000);

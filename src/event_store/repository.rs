@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{de::DeserializeOwned, Serialize};
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Transaction};
 use std::time::Duration;
 use uuid::Uuid;
 

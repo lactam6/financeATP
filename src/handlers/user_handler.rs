@@ -6,7 +6,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::aggregate::{Account, Aggregate, User};
-use crate::domain::{AccountEvent, OperationContext, UserEvent};
+use crate::domain::OperationContext;
 use crate::error::AppError;
 use crate::event_store::{AggregateOperation, EventStore};
 use crate::projection::ProjectionService;
@@ -20,6 +20,7 @@ use super::{CreateUserCommand, CreateUserResult};
 /// Handler for user creation
 pub struct CreateUserHandler {
     event_store: EventStore,
+    #[allow(dead_code)]
     projection: ProjectionService,
     pool: PgPool,
 }

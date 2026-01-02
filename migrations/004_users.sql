@@ -71,6 +71,15 @@ INSERT INTO users (id, username, email, display_name, is_system, created_at, upd
     ),
     (
         '00000000-0000-0000-0000-000000000002',
+        'SYSTEM_BURN',
+        'burn@system.internal',
+        'ATP Burn Sink',
+        TRUE,
+        NOW(),
+        NOW()
+    ),
+    (
+        '00000000-0000-0000-0000-000000000003',
         'SYSTEM_FEE',
         'fee@system.internal',
         'Fee Income',
@@ -79,7 +88,7 @@ INSERT INTO users (id, username, email, display_name, is_system, created_at, upd
         NOW()
     ),
     (
-        '00000000-0000-0000-0000-000000000003',
+        '00000000-0000-0000-0000-000000000004',
         'SYSTEM_RESERVE',
         'reserve@system.internal',
         'System Reserve',

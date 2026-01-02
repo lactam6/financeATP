@@ -59,21 +59,11 @@ impl MintHandler {
         // Get recipient's wallet account
         let recipient_account_id = self.get_wallet_account_id(command.recipient_user_id).await?;
 
-        // Load SYSTEM_MINT account
-        let mint_account: Account = self
-            .event_store
-            .load_aggregate(mint_account_id)
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?
-            .ok_or_else(|| AppError::Internal("SYSTEM_MINT account not found".to_string()))?;
+        // Load SYSTEM_MINT account from DB (bypasses event sourcing for system accounts)
+        let mint_account = self.load_system_account(mint_account_id).await?;
 
-        // Load recipient's account
-        let recipient_account: Account = self
-            .event_store
-            .load_aggregate(recipient_account_id)
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?
-            .ok_or_else(|| AppError::AccountNotFound(recipient_account_id.to_string()))?;
+        // Load recipient's account (use event sourcing if available, fallback to DB)
+        let recipient_account = self.load_account_with_fallback(recipient_account_id).await?;
 
         // Generate mint ID
         let mint_id = Uuid::new_v4();
@@ -195,6 +185,57 @@ impl MintHandler {
         .await?;
 
         account_id.ok_or_else(|| AppError::UserNotFound(user_id.to_string()))
+    }
+
+    /// Load system account directly from DB (bypasses event sourcing)
+    async fn load_system_account(&self, account_id: Uuid) -> Result<Account, AppError> {
+        // Get account info from DB
+        let account_info: Option<(Uuid, Uuid, String, bool)> = sqlx::query_as(
+            r#"
+            SELECT id, user_id, account_type, is_active
+            FROM accounts
+            WHERE id = $1
+            "#,
+        )
+        .bind(account_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let (id, user_id, account_type, _is_active) = account_info
+            .ok_or_else(|| AppError::Internal("SYSTEM_MINT account not found".to_string()))?;
+
+        // Get current balance from projection
+        let balance: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+            "SELECT balance FROM account_balances WHERE account_id = $1"
+        )
+        .bind(account_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        // Get current version from events
+        let version: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(version), 0) FROM events WHERE aggregate_id = $1"
+        )
+        .bind(account_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        // Construct Account from DB state
+        Ok(Account::from_db_state(id, user_id, account_type, balance.unwrap_or_default(), version))
+    }
+
+    /// Load account with event sourcing, fallback to DB if no events exist
+    async fn load_account_with_fallback(&self, account_id: Uuid) -> Result<Account, AppError> {
+        // Try event sourcing first
+        match self.event_store.load_aggregate::<Account>(account_id).await {
+            Ok(Some(account)) => Ok(account),
+            Ok(None) => {
+                // No events found, load from DB (for newly created accounts)
+                self.load_system_account(account_id).await
+                    .map_err(|_| AppError::AccountNotFound(account_id.to_string()))
+            }
+            Err(e) => Err(AppError::Internal(e.to_string())),
+        }
     }
 }
 

@@ -11,8 +11,7 @@ use sqlx::PgPool;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use finance_atp::{api, Config, AppError, db};
-use finance_atp::jobs;
+use finance_atp::{api, Config, db};
 
 /// Initialize tracing/logging
 fn init_tracing() {

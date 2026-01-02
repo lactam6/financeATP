@@ -6,7 +6,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::aggregate::{Account, Aggregate};
-use crate::domain::{AccountEvent, Amount, OperationContext};
+use crate::domain::{Amount, OperationContext};
 use crate::error::AppError;
 use crate::event_store::{AggregateOperation, EventStore};
 use crate::idempotency::IdempotencyRepository;
@@ -22,6 +22,7 @@ use super::{TransferCommand, TransferResult};
 pub struct TransferHandler {
     event_store: EventStore,
     projection: ProjectionService,
+    #[allow(dead_code)]
     idempotency: IdempotencyRepository,
     pool: PgPool,
 }

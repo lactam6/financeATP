@@ -100,6 +100,35 @@ impl Account {
         (account, event)
     }
 
+    /// Create an account from database state (bypasses event sourcing)
+    /// Used for system accounts that are seeded directly in DB
+    pub fn from_db_state(
+        id: Uuid,
+        user_id: Uuid,
+        account_type: String,
+        balance: rust_decimal::Decimal,
+        version: i64,
+    ) -> Self {
+        // System accounts (like SYSTEM_MINT) can have negative balances
+        // Use Balance::zero() if the value is negative, then set internal value directly
+        let balance_value = if balance >= rust_decimal::Decimal::ZERO {
+            Balance::new(balance).unwrap_or_else(|_| Balance::zero())
+        } else {
+            // For negative balances (SYSTEM_MINT liability), use internal construction
+            Balance::from_decimal_unchecked(balance)
+        };
+        
+        Self {
+            id,
+            user_id,
+            account_type,
+            balance: balance_value,
+            status: AccountStatus::Active,
+            version,
+            created_at: None, // Not tracked for DB-loaded accounts
+        }
+    }
+
     // =========================================================================
     // M065: Account::debit()
     // =========================================================================

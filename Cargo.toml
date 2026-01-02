@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["financeATP Team"]
 description = "ATP currency management backend API with event sourcing"
+default-run = "finance_atp"
 
 [dependencies]
 # Web framework
@@ -47,8 +48,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Security
 sha2 = "0.10"
-md5 = "0.7"
+rand = "0.8"
 hex = "0.4"
+md5 = "0.7"
 
 [dev-dependencies]
 tokio-test = "0.4"
