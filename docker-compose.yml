@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    image: finance_atp:latest
+    container_name: finance_atp_app
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgres://postgres:password@db:5432/finance_atp
+      - HOST=0.0.0.0
+      - PORT=3000
+      - RUST_LOG=info
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - finance_net
+
+  db:
+    image: postgres:14-alpine
+    container_name: finance_atp_db
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=finance_atp
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # Mount migrations directory to initialize the database automatically on first run
+      - ./migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - finance_net
+
+volumes:
+  pg_data:
+
+networks:
+  finance_net:

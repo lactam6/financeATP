@@ -43,6 +43,16 @@ cargo test -- --test-threads=1
 cargo run
 ```
 
+## Dockerでの起動（推奨）
+
+```bash
+# 全システムの起動
+docker-compose up -d
+
+# 停止
+docker-compose down
+```
+
 ## API エンドポイント
 
 | メソッド | パス                        | 説明         |
