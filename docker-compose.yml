@@ -1,15 +1,18 @@
 services:
   app:
-    build: .
     image: finance_atp:latest
     container_name: finance_atp_app
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=postgres://${DB_USER:-postgres}:${DB_PASSWORD:-password}@db:5432/${DB_NAME:-finance_atp}
+      - DATABASE_URL=postgres://postgres:password@db:5432/finance_atp
       - HOST=0.0.0.0
       - PORT=3000
-      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_LOG=info
+      - DB_HOST=db
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=finance_atp
     depends_on:
       db:
         condition: service_healthy
@@ -21,21 +24,13 @@ services:
     image: postgres:14-alpine
     container_name: finance_atp_db
     environment:
-      - POSTGRES_USER=${DB_USER:-postgres}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-password}
-      - POSTGRES_DB=${DB_NAME:-finance_atp}
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=finance_atp
     volumes:
       - pg_data:/var/lib/postgresql/data
-      # Mount migrations for the init script to use
-      - ./migrations:/migrations:ro
-      # Mount init script (single SQL file that includes all migrations)
-      - ./docker/init:/docker-entrypoint-initdb.d:ro
-    # DB port is NOT exposed externally for security
-    # Uncomment for local development debugging only:
-    # ports:
-    #   - "127.0.0.1:5432:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}" ]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
       timeout: 5s
       retries: 5

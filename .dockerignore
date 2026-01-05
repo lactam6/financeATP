@@ -4,9 +4,8 @@ target/
 .env
 .idea/
 .vscode/
-Dockerfile
 docker-compose.yml
 README.md
 docs/
-migrations/
 setup_db.bat
+dist/
