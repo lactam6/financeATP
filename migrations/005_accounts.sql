@@ -218,14 +218,14 @@ BEGIN
     SELECT COUNT(*) INTO v_system_account_count 
     FROM accounts a JOIN users u ON a.user_id = u.id 
     WHERE u.is_system = TRUE;
-    IF v_system_account_count != 3 THEN
-        RAISE EXCEPTION 'Expected 3 system accounts, found %', v_system_account_count;
+    IF v_system_account_count < 4 THEN
+        RAISE EXCEPTION 'Expected at least 4 system accounts, found %', v_system_account_count;
     END IF;
     
     -- Check account_balances
     SELECT COUNT(*) INTO v_balance_count FROM account_balances;
-    IF v_balance_count != 3 THEN
-        RAISE EXCEPTION 'Expected 3 balance records, found %', v_balance_count;
+    IF v_balance_count < 4 THEN
+        RAISE EXCEPTION 'Expected at least 4 balance records, found %', v_balance_count;
     END IF;
     
     -- Check get_wallet_account_id function

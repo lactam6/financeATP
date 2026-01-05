@@ -3,6 +3,8 @@
 
 # Environment variables (contains secrets like DATABASE_URL)
 .env
+.env.local
+.env.production
 
 # Temporary files
 cargo_warnings.txt
@@ -34,3 +36,10 @@ coverage/
 
 # Benchmark results
 criterion/
+
+# Docker distribution files
+finance_atp.tar
+*.tar
+
+# Distribution folder
+dist/

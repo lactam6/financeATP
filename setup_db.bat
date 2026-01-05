@@ -25,8 +25,8 @@ psql -U postgres -d finance_atp -f migrations\006_ledger.sql
 echo [7/8] Running 007_idempotency_audit.sql...
 psql -U postgres -d finance_atp -f migrations\007_idempotency_audit.sql
 
-echo [8/8] Running test_database.sql...
-psql -U postgres -d finance_atp -f migrations\test_database.sql
+echo [8/8] Running 099_test_database.sql...
+psql -U postgres -d finance_atp -f migrations\099_test_database.sql
 
 echo.
 echo Database setup complete!

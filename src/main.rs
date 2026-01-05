@@ -87,6 +87,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tracing::info!("Database connected successfully");
+
+    // Display startup info for users
+    display_startup_info(&pool, &addr).await;
+
     tracing::info!("Listening on http://{}", addr);
 
     // Build router and start server
@@ -134,4 +138,34 @@ async fn shutdown_signal() {
             tracing::info!("Received SIGTERM, initiating graceful shutdown...");
         },
     }
+}
+
+/// Display startup information for users
+async fn display_startup_info(pool: &PgPool, addr: &SocketAddr) {
+    // Get development API key for display
+    let api_key_info: Option<(String, String)> = sqlx::query_as(
+        "SELECT name, key_prefix FROM api_keys WHERE key_prefix = 'sk_dev_' LIMIT 1"
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    println!();
+    println!("╔════════════════════════════════════════════════════════════╗");
+    println!("║              financeATP - 起動完了                         ║");
+    println!("╠════════════════════════════════════════════════════════════╣");
+    println!("║  API Endpoint: http://{}                      ║", addr);
+    println!("║  Health Check: http://{}/health               ║", addr);
+    println!("╠════════════════════════════════════════════════════════════╣");
+    
+    if let Some((name, _prefix)) = api_key_info {
+        println!("║  開発用APIキー: test1234567890abcdef                       ║");
+        println!("║  (名前: {})                                    ║", name);
+    }
+    
+    println!("╠════════════════════════════════════════════════════════════╣");
+    println!("║  停止: Ctrl+C                                              ║");
+    println!("╚════════════════════════════════════════════════════════════╝");
+    println!();
 }

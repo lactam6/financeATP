@@ -129,8 +129,8 @@ BEGIN
     
     -- Check system users exist
     SELECT COUNT(*) INTO v_system_count FROM users WHERE is_system = TRUE;
-    IF v_system_count != 3 THEN
-        RAISE EXCEPTION 'Expected 3 system users, found %', v_system_count;
+    IF v_system_count < 4 THEN
+        RAISE EXCEPTION 'Expected at least 4 system users, found %', v_system_count;
     END IF;
     
     RAISE NOTICE 'Migration 004 completed successfully';
@@ -138,5 +138,5 @@ BEGIN
     RAISE NOTICE '  - valid_username constraint: OK';
     RAISE NOTICE '  - valid_email constraint: OK';
     RAISE NOTICE '  - indexes: OK';
-    RAISE NOTICE '  - system users: % seeded (SYSTEM_MINT, SYSTEM_FEE, SYSTEM_RESERVE)', v_system_count;
+    RAISE NOTICE '  - system users: % seeded (SYSTEM_MINT, SYSTEM_BURN, SYSTEM_FEE, SYSTEM_RESERVE)', v_system_count;
 END $$;

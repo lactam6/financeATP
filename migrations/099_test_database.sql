@@ -98,8 +98,8 @@ DECLARE
 BEGIN
     SELECT COUNT(*) INTO v_count FROM users WHERE is_system = TRUE;
     
-    IF v_count != 3 THEN
-        RAISE EXCEPTION 'Expected 3 system users, found %', v_count;
+    IF v_count < 4 THEN
+        RAISE EXCEPTION 'Expected at least 4 system users, found %', v_count;
     END IF;
     
     -- Check specific users
@@ -109,11 +109,14 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM users WHERE username = 'SYSTEM_FEE') THEN
         RAISE EXCEPTION 'SYSTEM_FEE user not found';
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM users WHERE username = 'SYSTEM_BURN') THEN
+        RAISE EXCEPTION 'SYSTEM_BURN user not found';
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM users WHERE username = 'SYSTEM_RESERVE') THEN
         RAISE EXCEPTION 'SYSTEM_RESERVE user not found';
     END IF;
     
-    RAISE NOTICE 'OK: All 3 system users exist (SYSTEM_MINT, SYSTEM_FEE, SYSTEM_RESERVE)';
+    RAISE NOTICE 'OK: All 4 system users exist (SYSTEM_MINT, SYSTEM_BURN, SYSTEM_FEE, SYSTEM_RESERVE)';
 END $$;
 
 -- ============================================================================
@@ -132,15 +135,15 @@ BEGIN
     
     SELECT COUNT(*) INTO v_balance_count FROM account_balances;
     
-    IF v_account_count != 3 THEN
-        RAISE EXCEPTION 'Expected 3 system accounts, found %', v_account_count;
+    IF v_account_count < 4 THEN
+        RAISE EXCEPTION 'Expected at least 4 system accounts, found %', v_account_count;
     END IF;
     
-    IF v_balance_count != 3 THEN
-        RAISE EXCEPTION 'Expected 3 balance records, found %', v_balance_count;
+    IF v_balance_count < 4 THEN
+        RAISE EXCEPTION 'Expected at least 4 balance records, found %', v_balance_count;
     END IF;
     
-    RAISE NOTICE 'OK: 3 system accounts and 3 balance records exist';
+    RAISE NOTICE 'OK: 4 system accounts and 4 balance records exist';
 END $$;
 
 -- ============================================================================
