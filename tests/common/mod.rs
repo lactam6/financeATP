@@ -34,7 +34,6 @@ pub async fn setup_test_db() -> PgPool {
         r#"
         INSERT INTO api_keys (id, name, key_hash, key_prefix, permissions, is_active)
         VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (key_prefix) DO NOTHING
         "#
     )
     .bind(uuid::Uuid::new_v4())

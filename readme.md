@@ -65,6 +65,14 @@ test1234567890abcdef
 | PATCH    | `/api/v1/users/{user_id}`         | ユーザー更新     | `write:users`   |
 | DELETE   | `/api/v1/users/{user_id}`         | ユーザー無効化   | `write:users`   |
 | GET      | `/api/v1/users/{user_id}/balance` | 残高取得         | `read:accounts` |
+| GET      | `/api/v1/users/{user_id}/history` | ユーザー取引履歴（直近1ヶ月） | `read:accounts` |
+| GET      | `/api/v1/accounts/{account_id}/history` | 口座取引履歴（直近1ヶ月） | `read:accounts` |
+
+`/api/v1/users/{user_id}/history` と `/api/v1/accounts/{account_id}/history` の各 `entries[]` には以下を含みます。
+
+- `counterparty_user_id`: 取引相手のユーザーID（取得不可時は `null`）
+- `counterparty_display_name`: 取引相手の表示名（取得不可時は `null`）
+- 対象イベントは `MoneyCredited` / `MoneyDebited` のみ（新しい順）
 
 #### ユーザー作成例
 ```bash
@@ -148,7 +156,6 @@ curl -X POST http://localhost:3000/api/v1/admin/mint \
 | `admin:burn`      | ATPの焼却              |
 | `admin:events`    | イベントログの参照     |
 | `admin:api-keys`  | APIキーの管理          |
-
 ---
 
 ## 冪等性 (Idempotency)

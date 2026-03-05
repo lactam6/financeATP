@@ -13,6 +13,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use sqlx::PgPool;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::domain::OperationContext;
@@ -146,6 +147,10 @@ pub struct HistoryEntry {
     pub event_type: String,
     pub amount: Option<Decimal>,
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counterparty_user_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counterparty_display_name: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -153,6 +158,26 @@ pub struct HistoryEntry {
 pub struct HistoryResponse {
     pub user_id: Uuid,
     pub entries: Vec<HistoryEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AccountHistoryResponse {
+    pub account_id: Uuid,
+    pub entries: Vec<HistoryEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct CounterpartyIdentity {
+    user_id: Uuid,
+    display_name: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct TransferLedgerRow {
+    journal_id: Uuid,
+    account_id: Uuid,
+    user_id: Uuid,
+    display_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,6 +194,112 @@ pub struct EventsQuery {
 
 fn default_limit() -> i64 {
     50
+}
+
+fn extract_transfer_id(data: &serde_json::Value) -> Option<Uuid> {
+    data.get("transfer_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok())
+}
+
+async fn load_counterparty_map(
+    pool: &PgPool,
+    account_id: Uuid,
+    events: &[(Uuid, String, serde_json::Value, DateTime<Utc>)],
+) -> Result<HashMap<Uuid, CounterpartyIdentity>, AppError> {
+    let transfer_ids: Vec<Uuid> = events
+        .iter()
+        .filter_map(|(_, _, data, _)| extract_transfer_id(data))
+        .collect();
+
+    if transfer_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows: Vec<TransferLedgerRow> = sqlx::query_as(
+        r#"
+        SELECT
+            le.journal_id,
+            le.account_id,
+            a.user_id,
+            COALESCE(NULLIF(u.display_name, ''), u.username) AS display_name
+        FROM ledger_entries le
+        INNER JOIN accounts a
+          ON a.id = le.account_id
+        LEFT JOIN users u
+          ON u.id = a.user_id
+        WHERE le.journal_id = ANY($1::uuid[])
+        "#,
+    )
+    .bind(&transfer_ids)
+    .fetch_all(pool)
+    .await?;
+
+    let mut rows_by_journal: HashMap<Uuid, Vec<TransferLedgerRow>> = HashMap::new();
+
+    for row in rows {
+        rows_by_journal.entry(row.journal_id).or_default().push(row);
+    }
+
+    let mut counterparty_map = HashMap::new();
+
+    for transfer_id in transfer_ids {
+        if counterparty_map.contains_key(&transfer_id) {
+            continue;
+        }
+
+        let Some(rows) = rows_by_journal.get(&transfer_id) else {
+            continue;
+        };
+
+        let counterpart = rows
+            .iter()
+            .find(|row| row.account_id != account_id)
+            .or_else(|| rows.first());
+
+        if let Some(counterpart) = counterpart {
+            counterparty_map.insert(
+                transfer_id,
+                CounterpartyIdentity {
+                    user_id: counterpart.user_id,
+                    display_name: counterpart.display_name.clone(),
+                },
+            );
+        }
+    }
+
+    Ok(counterparty_map)
+}
+
+fn map_history_entry(
+    id: Uuid,
+    event_type: String,
+    data: serde_json::Value,
+    created_at: DateTime<Utc>,
+    counterparty_map: &HashMap<Uuid, CounterpartyIdentity>,
+) -> HistoryEntry {
+    let amount = data.get("amount").and_then(|v| {
+        v.as_str()
+            .and_then(|s| s.parse::<Decimal>().ok())
+            .or_else(|| v.as_f64().map(|f| Decimal::from_f64_retain(f).unwrap_or_default()))
+    });
+    let description = data
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let transfer_id = extract_transfer_id(&data);
+    let counterparty = transfer_id.and_then(|transfer_id| counterparty_map.get(&transfer_id));
+
+    HistoryEntry {
+        event_id: id,
+        event_type,
+        amount,
+        description,
+        counterparty_user_id: counterparty.map(|counterparty| counterparty.user_id),
+        counterparty_display_name: counterparty
+            .and_then(|counterparty| counterparty.display_name.clone()),
+        created_at,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -251,6 +382,8 @@ pub fn create_router() -> Router<PgPool> {
         .route("/users/:user_id/balance", get(get_user_balance))
         // M125: History
         .route("/users/:user_id/history", get(get_user_history))
+        // Account history (last 1 month)
+        .route("/accounts/:account_id/history", get(get_account_history))
         // M126, M127: Transfers
         .route("/transfers", post(transfer))
         .route("/transfers/:transfer_id", get(get_transfer))
@@ -437,8 +570,14 @@ async fn get_user_balance(
 /// Get user transaction history
 async fn get_user_history(
     State(pool): State<PgPool>,
+    Extension(api_key): Extension<AuthenticatedApiKey>,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<HistoryResponse>, AppError> {
+    // Check permission
+    if !api_key.has_permission("read:accounts") {
+        return Err(AppError::Forbidden("read:accounts permission required".to_string()));
+    }
+
     // Get user's account
     let account_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM accounts WHERE user_id = $1 AND account_type = 'user_wallet'",
@@ -454,35 +593,22 @@ async fn get_user_history(
         r#"
         SELECT id, event_type, event_data, created_at
         FROM events
-        WHERE aggregate_id = $1
+        WHERE aggregate_type = 'Account'
+          AND aggregate_id = $1
+          AND event_type IN ('MoneyCredited', 'MoneyDebited')
+          AND created_at >= NOW() - INTERVAL '1 month'
         ORDER BY created_at DESC
-        LIMIT 100
         "#,
     )
     .bind(account_id)
     .fetch_all(&pool)
     .await?;
+    let counterparty_map = load_counterparty_map(&pool, account_id, &events).await?;
 
     let entries: Vec<HistoryEntry> = events
         .into_iter()
         .map(|(id, event_type, data, created_at)| {
-            let amount = data.get("amount").and_then(|v| {
-                v.as_str()
-                    .and_then(|s| s.parse::<Decimal>().ok())
-                    .or_else(|| v.as_f64().map(|f| Decimal::from_f64_retain(f).unwrap_or_default()))
-            });
-            let description = data
-                .get("description")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            HistoryEntry {
-                event_id: id,
-                event_type,
-                amount,
-                description,
-                created_at,
-            }
+            map_history_entry(id, event_type, data, created_at, &counterparty_map)
         })
         .collect();
 
@@ -490,6 +616,57 @@ async fn get_user_history(
         user_id,
         entries,
     }))
+}
+
+/// Get account transaction history in the last month (newest first)
+async fn get_account_history(
+    State(pool): State<PgPool>,
+    Extension(api_key): Extension<AuthenticatedApiKey>,
+    Path(account_id): Path<Uuid>,
+) -> Result<Json<AccountHistoryResponse>, AppError> {
+    // Check permission
+    if !api_key.has_permission("read:accounts") {
+        return Err(AppError::Forbidden("read:accounts permission required".to_string()));
+    }
+
+    // Ensure account exists
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await?;
+
+    if !exists {
+        return Err(AppError::AccountNotFound(account_id.to_string()));
+    }
+
+    // Last 1 month transaction events for this account
+    let events: Vec<(Uuid, String, serde_json::Value, DateTime<Utc>)> = sqlx::query_as(
+        r#"
+        SELECT id, event_type, event_data, created_at
+        FROM events
+        WHERE aggregate_type = 'Account'
+          AND aggregate_id = $1
+          AND event_type IN ('MoneyCredited', 'MoneyDebited')
+          AND created_at >= NOW() - INTERVAL '1 month'
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(&pool)
+    .await?;
+
+    let counterparty_map = load_counterparty_map(&pool, account_id, &events).await?;
+
+    let entries: Vec<HistoryEntry> = events
+        .into_iter()
+        .map(|(id, event_type, data, created_at)| {
+            map_history_entry(id, event_type, data, created_at, &counterparty_map)
+        })
+        .collect();
+
+    Ok(Json(AccountHistoryResponse { account_id, entries }))
 }
 
 // =========================================================================
@@ -940,7 +1117,7 @@ async fn update_api_key(
     }
 
     // Fetch updated key
-    let row: Option<(Uuid, String, String, Vec<String>, i32, bool, DateTime<Utc>, Option<DateTime<Utc>>)> = 
+    let row: Option<(Uuid, String, String, Vec<String>, i32, bool, DateTime<Utc>, Option<DateTime<Utc>>)> =
         sqlx::query_as(
             "SELECT id, name, key_prefix, permissions, rate_limit_per_minute, is_active, created_at, last_used_at FROM api_keys WHERE id = $1"
         )

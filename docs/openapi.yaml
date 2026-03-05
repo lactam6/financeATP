@@ -136,6 +136,55 @@ components:
           type: string
           description: 残高（8桁精度）
 
+    HistoryEntry:
+      type: object
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+        amount:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        counterparty_user_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: 取引相手のユーザーID（取得できない場合はnull）
+        counterparty_display_name:
+          type: string
+          nullable: true
+          description: 取引相手の表示名（取得できない場合はnull）
+        created_at:
+          type: string
+          format: date-time
+
+    UserHistoryResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/HistoryEntry'
+
+    AccountHistoryResponse:
+      type: object
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/HistoryEntry'
+
     TransferResponse:
       type: object
       properties:
@@ -315,6 +364,58 @@ paths:
                 $ref: '#/components/schemas/BalanceResponse'
         '404':
           description: ユーザーが見つからない
+
+  /users/{user_id}/history:
+    get:
+      tags: [Users]
+      summary: ユーザー取引履歴取得（直近1ヶ月）
+      description: |
+        指定ユーザー口座の直近1ヶ月以内の取引履歴を新しい順で取得。
+        `read:accounts` 権限が必要。
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserHistoryResponse'
+        '403':
+          description: read:accounts権限が必要
+        '404':
+          description: ユーザーが見つからない
+
+  /accounts/{account_id}/history:
+    get:
+      tags: [Users]
+      summary: 口座取引履歴取得（直近1ヶ月）
+      description: |
+        指定口座の直近1ヶ月以内の取引履歴を新しい順で取得。
+        `read:accounts` 権限が必要。
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountHistoryResponse'
+        '403':
+          description: read:accounts権限が必要
+        '404':
+          description: 口座が見つからない
 
   /transfers:
     post:

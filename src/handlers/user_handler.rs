@@ -95,15 +95,15 @@ impl CreateUserHandler {
             .map_err(|e| AppError::Internal(e.to_string()))?,
         ];
 
-        // Persist events atomically
+        // Persist events atomically (using the same transaction)
         let event_ids = self
             .event_store
-            .append_atomic(operations, None, context)
+            .append_to_transaction(&mut tx, &operations, None, context)
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
         // Insert user record (for queries) - within transaction
-        sqlx::query(
+        if let Err(e) = sqlx::query(
             r#"
             INSERT INTO users (id, username, email, display_name, created_at, updated_at)
             VALUES ($1, $2, $3, $4, NOW(), NOW())
@@ -114,7 +114,28 @@ impl CreateUserHandler {
         .bind(&user.email())
         .bind(user.display_name())
         .execute(&mut *tx)
-        .await?;
+        .await
+        {
+            // Explicit rollback to ensure events are not persisted
+            tx.rollback().await.ok();
+            
+            if let Some(db_err) = e.as_database_error() {
+                if let Some(code) = db_err.code() {
+                    // 23514 = check_violation
+                    if code == "23514" && db_err.message().contains("valid_username") {
+                        return Err(AppError::InvalidRequest(
+                            "Username must be at least 3 characters and alphanumeric (a-z, 0-9, _)".to_string(),
+                        ));
+                    }
+                    if code == "23514" && db_err.message().contains("valid_email") {
+                        return Err(AppError::InvalidRequest(
+                            "Invalid email format".to_string(),
+                        ));
+                    }
+                }
+            }
+            return Err(AppError::Internal(e.to_string()));
+        }
 
         // Insert account record - within transaction
         sqlx::query(

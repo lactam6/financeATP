@@ -112,20 +112,21 @@ impl EventStore {
     // =========================================================================
 
     /// Try to atomically append events (single attempt)
-    async fn try_append_atomic(
+    /// Append events using an existing transaction
+    /// Note: This version does NOT handle retries. The caller is responsible for
+    /// handling concurrency errors and retrying the transaction if needed.
+    pub async fn append_to_transaction(
         &self,
+        tx: &mut Transaction<'_, Postgres>,
         operations: &[AggregateOperation],
         idempotency_key: Option<Uuid>,
         context: &OperationContext,
     ) -> Result<Vec<Uuid>, EventStoreError> {
         let context_json = serde_json::to_value(context)?;
 
-        // Start transaction with SERIALIZABLE isolation
-        let mut tx = self.pool.begin().await?;
-
         // Check idempotency key if provided
         if let Some(key) = idempotency_key {
-            if let Some(existing) = self.check_idempotency_key(&mut tx, key).await? {
+            if let Some(existing) = self.check_idempotency_key(tx, key).await? {
                 // Already processed, return existing event ID
                 return Ok(vec![existing]);
             }
@@ -136,7 +137,7 @@ impl EventStore {
         for (idx, op) in operations.iter().enumerate() {
             // M079: Verify expected version (optimistic locking)
             let current_version = self
-                .get_current_version(&mut tx, op.aggregate_id)
+                .get_current_version(tx, op.aggregate_id)
                 .await?;
 
             if current_version != op.expected_version {
@@ -168,7 +169,7 @@ impl EventStore {
             .bind(&op.event_data)
             .bind(&context_json)
             .bind(idem_key)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
 
             event_ids.push(event_id);
@@ -176,14 +177,41 @@ impl EventStore {
 
         // Mark idempotency key as completed
         if let Some(key) = idempotency_key {
-            self.complete_idempotency_key(&mut tx, key, event_ids[0])
+            self.complete_idempotency_key(tx, key, event_ids[0])
                 .await?;
         }
 
-        // Commit transaction
-        tx.commit().await?;
-
         Ok(event_ids)
+    }
+
+    // =========================================================================
+    // M077: try_append_atomic (single attempt)
+    // =========================================================================
+
+    /// Try to atomically append events (single attempt)
+    async fn try_append_atomic(
+        &self,
+        operations: &[AggregateOperation],
+        idempotency_key: Option<Uuid>,
+        context: &OperationContext,
+    ) -> Result<Vec<Uuid>, EventStoreError> {
+        // Start transaction with SERIALIZABLE isolation
+        let mut tx = self.pool.begin().await?;
+
+        let result = self
+            .append_to_transaction(&mut tx, operations, idempotency_key, context)
+            .await;
+
+        match result {
+            Ok(ids) => {
+                tx.commit().await?;
+                Ok(ids)
+            }
+            Err(e) => {
+                // Transaction rollback happens automatically on drop
+                Err(e)
+            }
+        }
     }
 
     /// Get current version of an aggregate
