@@ -1,0 +1,50 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: finance_atp:production
+    container_name: finance_atp_app
+    environment:
+      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-10}
+      DB_HOST: db
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      HOST: 0.0.0.0
+      PORT: 3000
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - finance_net
+
+  db:
+    image: postgres:14-alpine
+    container_name: finance_atp_db
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - finance-atp-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - finance_net
+
+volumes:
+  finance-atp-postgres-data:
+
+networks:
+  finance_net:
